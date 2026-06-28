@@ -4,16 +4,9 @@ from discord.ext import commands
 import asyncio
 import os
 
-# ─────────────────────────────────────────────
-#  Token lu depuis la variable d'environnement
-# ─────────────────────────────────────────────
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# ─────────────────────────────────────────────
-#  Intents
-# ─────────────────────────────────────────────
 intents = discord.Intents.default()
-intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -59,46 +52,78 @@ async def ban_all(
         )
         return
 
-    if not interaction.user.guild_permissions.ban_members:
+    # Récupérer le membre correctement même en User Install
+    member = guild.get_member(interaction.user.id)
+    if member is None:
+        try:
+            member = await guild.fetch_member(interaction.user.id)
+        except Exception:
+            member = None
+
+    # Vérification permission BAN du membre
+    can_ban = False
+    if member is not None:
+        can_ban = member.guild_permissions.ban_members or member.guild_permissions.administrator
+    
+    if not can_ban:
         await interaction.response.send_message(
-            "❌ Tu n'as pas la permission de bannir des membres.",
+            "❌ Tu n'as pas la permission de bannir des membres sur ce serveur.",
             ephemeral=True,
         )
         return
 
-    if not guild.me.guild_permissions.ban_members:
+    # Vérification permission BAN du bot
+    bot_member = guild.get_member(bot.user.id)
+    if bot_member is None:
+        try:
+            bot_member = await guild.fetch_member(bot.user.id)
+        except Exception:
+            bot_member = None
+
+    if bot_member is None or not bot_member.guild_permissions.ban_members:
         await interaction.response.send_message(
-            "❌ Le bot n'a pas la permission de bannir des membres.",
+            "❌ Le bot n'a pas la permission de bannir sur ce serveur.\n"
+            "Ajoute-le au serveur avec la permission **Ban Members**.",
             ephemeral=True,
         )
         return
 
     await interaction.response.defer(ephemeral=True)
 
-    members = [
-        m for m in guild.members
-        if m.id != interaction.user.id
-        and not m.bot
-        and m.id != bot.user.id
-        and guild.me.top_role > m.top_role
-    ]
+    # Récupération des membres
+    try:
+        members = [
+            m async for m in guild.fetch_members(limit=None)
+            if m.id != interaction.user.id
+            and not m.bot
+            and m.id != bot.user.id
+            and bot_member.top_role > m.top_role
+        ]
+    except Exception:
+        members = [
+            m for m in guild.members
+            if m.id != interaction.user.id
+            and not m.bot
+            and m.id != bot.user.id
+            and bot_member.top_role > m.top_role
+        ]
 
     total = len(members)
     banni = 0
     echec = 0
     echecs_liste = []
 
-    for member in members:
+    for m in members:
         try:
-            await guild.ban(member, reason=raison, delete_message_days=0)
+            await guild.ban(m, reason=raison, delete_message_days=0)
             banni += 1
             await asyncio.sleep(0.5)
         except discord.Forbidden:
             echec += 1
-            echecs_liste.append(f"`{member}` — permissions insuffisantes")
+            echecs_liste.append(f"`{m}` — permissions insuffisantes")
         except discord.HTTPException as e:
             echec += 1
-            echecs_liste.append(f"`{member}` — {e}")
+            echecs_liste.append(f"`{m}` — {e}")
 
     rapport = (
         f"✅ **Ban massif terminé !**\n"
